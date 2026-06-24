@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+backtest_summary_*.txt
+backtest_result*.html
+*.log

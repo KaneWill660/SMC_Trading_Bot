@@ -1,0 +1,6 @@
+MetaTrader5
+pandas
+numpy
+loguru
+httpx
+python-dotenv
