@@ -17,7 +17,7 @@ HTF_CANDLE_COUNT = 200
 SWING_N = 5  # lookback window on each side for swing detection
 
 
-def get_bias(symbol: str = "XAUUSDm", timeframe: int = mt5.TIMEFRAME_H4) -> str:
+def get_bias(symbol: str = "XAUUSDc", timeframe: int = mt5.TIMEFRAME_H4) -> str:
     """
     Fetch HTF data and return "bullish", "bearish", or "ranging".
     """
@@ -48,7 +48,7 @@ def compute_bias_from_df(df: pd.DataFrame, n: int = SWING_N) -> str:
 
 
 def get_bias_with_levels(
-    symbol: str = "XAUUSDm",
+    symbol: str = "XAUUSDc",
     timeframe: int = mt5.TIMEFRAME_H4,
 ) -> dict:
     """

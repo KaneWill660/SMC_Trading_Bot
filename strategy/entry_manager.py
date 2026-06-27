@@ -22,8 +22,6 @@ from connectors.mt5_connector import get_ohlcv
 from risk.risk_manager import calculate_lot_size, calculate_tp
 from strategy.htf_bias import get_bias_with_levels
 
-SYMBOL = "XAUUSDm"
-
 # Candle counts per timeframe
 COUNT_H1  = 100
 COUNT_M15 = 100
@@ -46,22 +44,32 @@ def get_current_session() -> str:
 
 
 def is_trading_session() -> bool:
-    """Only trade during London and NY sessions (8:00–21:00 UTC)."""
-    hour = datetime.now(timezone.utc).hour
-    return 8 <= hour < 21
+    """Trade all hours while market is open (XAUUSDc trades 24/5, Mon–Fri)."""
+    now = datetime.now(timezone.utc)
+    if now.weekday() == 5:          # Saturday — đóng cửa cả ngày
+        return False
+    if now.weekday() == 6 and now.hour < 21:  # Sunday trước 21:00 UTC
+        return False
+    return True
 
 
-def check_for_signal(balance: float, risk_percent: float = 0.01) -> "dict | None":
+def check_for_signal(
+    symbol: str,
+    balance: float,
+    risk_percent: float = 0.01,
+    fixed_lot: "float | None" = None,
+) -> "dict | None":
     """
-    Run the full multi-timeframe analysis and return a signal dict if conditions met,
-    or None if no valid setup found.
+    Run the full multi-timeframe analysis for the given symbol.
+    fixed_lot: if set, use this lot size instead of calculating from risk_percent.
+    Returns a signal dict if conditions are met, or None.
     """
     if not is_trading_session():
         logger.debug("Outside trading session — skipping")
         return None
 
     # ── Step 1: HTF Bias ──────────────────────────────────────────────────────
-    htf = get_bias_with_levels(SYMBOL, mt5.TIMEFRAME_H4)
+    htf = get_bias_with_levels(symbol, mt5.TIMEFRAME_H4)
     bias = htf.get("bias", "ranging")
     if bias == "ranging":
         logger.debug("HTF bias: ranging — no trade")
@@ -69,7 +77,7 @@ def check_for_signal(balance: float, risk_percent: float = 0.01) -> "dict | None
     logger.info(f"HTF bias: {bias}")
 
     # ── Step 2: H1 Order Block + BOS ─────────────────────────────────────────
-    df_h1 = get_ohlcv(mt5.TIMEFRAME_H1, COUNT_H1, SYMBOL)
+    df_h1 = get_ohlcv(mt5.TIMEFRAME_H1, COUNT_H1, symbol)
     if df_h1 is None:
         return None
 
@@ -102,7 +110,7 @@ def check_for_signal(balance: float, risk_percent: float = 0.01) -> "dict | None
     logger.info(f"H1 OB found: {ob['bottom']:.2f}–{ob['top']:.2f} ({bias})")
 
     # ── Step 3: M15 FVG (preferred, not required) ────────────────────────────
-    df_m15 = get_ohlcv(mt5.TIMEFRAME_M15, COUNT_M15, SYMBOL)
+    df_m15 = get_ohlcv(mt5.TIMEFRAME_M15, COUNT_M15, symbol)
     fvg_in_ob = None
     if df_m15 is not None:
         fvgs = find_fvgs(df_m15)
@@ -113,7 +121,7 @@ def check_for_signal(balance: float, risk_percent: float = 0.01) -> "dict | None
             logger.info(f"M15 FVG in OB: {fvg_in_ob['bottom']:.2f}–{fvg_in_ob['top']:.2f}")
 
     # ── Step 4: M5 CHoCH confirmation ────────────────────────────────────────
-    df_m5 = get_ohlcv(mt5.TIMEFRAME_M5, COUNT_M5, SYMBOL)
+    df_m5 = get_ohlcv(mt5.TIMEFRAME_M5, COUNT_M5, symbol)
     if df_m5 is None:
         return None
 
@@ -144,9 +152,10 @@ def check_for_signal(balance: float, risk_percent: float = 0.01) -> "dict | None
             tp = round(tp_target, 2)
 
     direction = "BUY" if bias == "bullish" else "SELL"
-    lot = calculate_lot_size(balance, entry, sl, risk_percent)
+    lot = fixed_lot if fixed_lot else calculate_lot_size(balance, entry, sl, risk_percent)
 
     signal = {
+        "symbol":     symbol,
         "direction":  direction,
         "htf_bias":   bias,
         "ob_top":     ob["top"],

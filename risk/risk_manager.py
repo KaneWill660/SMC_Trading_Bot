@@ -71,7 +71,12 @@ class DailyRiskTracker:
     def record_trade(self, pnl: float):
         self.daily_pnl += pnl
         if pnl < 0:
-            logger.info(f"Trade loss recorded: {pnl:.2f} | Daily PnL: {self.daily_pnl:.2f}")
+            self._tripped = True
+            logger.warning(
+                f"Trade loss recorded: {pnl:.2f} — dừng trade hôm nay"
+            )
+        else:
+            logger.info(f"Trade win recorded: +{pnl:.2f} | Daily PnL: {self.daily_pnl:.2f}")
 
     def circuit_breaker_tripped(self) -> bool:
         if self._tripped:

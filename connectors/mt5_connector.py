@@ -1,6 +1,6 @@
 import os
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone, timedelta
+from typing import Optional, List
 
 import MetaTrader5 as mt5
 import pandas as pd
@@ -9,7 +9,6 @@ from loguru import logger
 
 load_dotenv()
 
-SYMBOL   = "XAUUSDm"
 DEVIATION = 20  # max price deviation in points for market orders
 
 
@@ -35,7 +34,7 @@ def disconnect():
     logger.info("MT5 disconnected")
 
 
-def get_ohlcv(timeframe: int, count: int, symbol: str = SYMBOL) -> Optional[pd.DataFrame]:
+def get_ohlcv(timeframe: int, count: int, symbol: str = "XAUUSDc") -> Optional[pd.DataFrame]:
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
     if rates is None or len(rates) == 0:
         logger.error(f"Failed to get OHLCV {symbol} tf={timeframe}: {mt5.last_error()}")
@@ -59,7 +58,7 @@ def place_market_order(
     sl: float,
     tp: float,
     comment: str = "SMC_Bot",
-    symbol: str = SYMBOL,
+    symbol: str = "XAUUSDc",
 ) -> Optional[int]:
     """
     Place a market order.
@@ -93,23 +92,69 @@ def place_market_order(
     return result.order
 
 
-def get_open_positions(symbol: str = SYMBOL) -> list:
-    positions = mt5.positions_get(symbol=symbol)
+def get_open_positions(symbol: str = None) -> list:
+    positions = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
     return list(positions) if positions else []
 
 
-def close_position(ticket: int, symbol: str = SYMBOL) -> bool:
+def get_all_positions() -> list:
+    """Return all open positions across all symbols."""
+    positions = mt5.positions_get()
+    return list(positions) if positions else []
+
+
+def get_pending_orders() -> list:
+    """Return all pending orders (limit/stop orders not yet triggered)."""
+    orders = mt5.orders_get()
+    return list(orders) if orders else []
+
+
+def get_deal_history(days: int = 1) -> list:
+    """Return closed deals from the last N days."""
+    now   = datetime.now(timezone.utc)
+    start = now - timedelta(days=days)
+    deals = mt5.history_deals_get(start, now)
+    if deals is None:
+        return []
+    return [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
+
+
+def move_sl_to_entry(ticket: int) -> bool:
+    """Move SL to entry price (breakeven) for a position."""
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        logger.warning(f"Position {ticket} not found for breakeven")
+        return False
+    pos = positions[0]
+    if pos.sl == pos.price_open:
+        return True  # already at breakeven
+    request = {
+        "action":   mt5.TRADE_ACTION_SLTP,
+        "position": ticket,
+        "sl":       pos.price_open,
+        "tp":       pos.tp,
+    }
+    result = mt5.order_send(request)
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        logger.error(f"Breakeven failed ticket={ticket}: {result.retcode} {result.comment}")
+        return False
+    logger.info(f"Breakeven set for ticket={ticket} @ {pos.price_open}")
+    return True
+
+
+def close_position(ticket: int, symbol: str = None) -> bool:
     pos = mt5.positions_get(ticket=ticket)
     if not pos:
         logger.warning(f"Position {ticket} not found")
         return False
     pos = pos[0]
+    sym        = symbol or pos.symbol
     direction  = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-    price      = mt5.symbol_info_tick(symbol).bid if pos.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(symbol).ask
+    price      = mt5.symbol_info_tick(sym).bid if pos.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(sym).ask
 
     request = {
         "action":    mt5.TRADE_ACTION_DEAL,
-        "symbol":    symbol,
+        "symbol":    sym,
         "volume":    pos.volume,
         "type":      direction,
         "position":  ticket,

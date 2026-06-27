@@ -29,19 +29,19 @@ def detect_bos(
     swing_highs: list,
     swing_lows: list,
     direction: str,
+    buffer: float = 0.50,
 ) -> bool:
     """
-    Check if the latest closed candle breaks the most recent swing point
-    in the given direction, confirming trend continuation.
-    direction: "bullish" → price breaks above last swing high
-               "bearish" → price breaks below last swing low
+    Check if the latest closed candle breaks the most recent swing point.
+    buffer: allow price to be within this distance of the swing level (XAUUSD units).
+    This handles spread/noise where price tests but doesn't close exactly past the level.
     """
     if direction == "bullish" and swing_highs:
         last_sh = swing_highs[-1][1]
-        return float(df["close"].iloc[-1]) > last_sh
+        return float(df["close"].iloc[-1]) > (last_sh - buffer)
     if direction == "bearish" and swing_lows:
         last_sl = swing_lows[-1][1]
-        return float(df["close"].iloc[-1]) < last_sl
+        return float(df["close"].iloc[-1]) < (last_sl + buffer)
     return False
 
 

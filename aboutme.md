@@ -1,7 +1,7 @@
 # SMC Trading Bot — Project Overview
 
 ## Mục tiêu
-Bot scalping tự động cặp XAUUSDm trên sàn Exness, sử dụng Smart Money Concepts (SMC) làm chiến lược phân tích. Chỉ vào lệnh thuận chiều xu hướng khung lớn (HTF), không đánh ngược trend.
+Bot scalping tự động cặp XAUUSDc trên sàn Exness, sử dụng Smart Money Concepts (SMC) làm chiến lược phân tích. Chỉ vào lệnh thuận chiều xu hướng khung lớn (HTF), không đánh ngược trend.
 
 ## Chiến lược giao dịch
 
@@ -59,7 +59,7 @@ SMC_Trading_Bot/
 
 ## Thông số giao dịch
 
-- **Cặp tiền**: XAUUSDm
+- **Cặp tiền**: XAUUSDc
 - **Broker**: Exness (tài khoản Raw Spread hoặc Zero)
 - **Session**: London + NY overlap (13:00–17:00 UTC)
 - **Risk/trade**: 1% tài khoản

@@ -15,9 +15,11 @@ from typing import Tuple
 import MetaTrader5 as mt5
 import pandas as pd
 from backtesting import Backtest, Strategy
+from dotenv import load_dotenv
 from loguru import logger
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 from connectors.mt5_connector import connect, disconnect, get_ohlcv
 from analysis.structure import find_swing_points, detect_bos, detect_choch
@@ -25,12 +27,20 @@ from analysis.order_blocks import find_bullish_obs, find_bearish_obs, get_neares
 from strategy.htf_bias import compute_bias_from_df
 from risk.risk_manager import calculate_tp
 
-SYMBOL      = "XAUUSDm"
+SYMBOLS = [s.strip() for s in os.getenv("SYMBOLS", "XAUUSDc").split(",") if s.strip()]
 MIN_RR      = 2.0
 OB_BUFFER   = 0.50
-MAX_SL_ABS  = 25.0   # max SL distance tuyệt đối (price units)
-ATR_MULT    = 1.5    # max SL distance = ATR_MULT × ATR(14)
+MAX_SL_ABS  = 35.0
+ATR_MULT    = 2.0
 ATR_PERIOD  = 14
+
+def _get_symbol_lot(symbol: str) -> float:
+    """Đọc lot cố định từ .env. Trả về 0.0 nếu không set."""
+    val = os.getenv(f"SYMBOL_LOT_{symbol}", "").strip()
+    try:
+        return float(val) if val else 0.0
+    except ValueError:
+        return 0.0
 
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
@@ -51,10 +61,15 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
 class SMCStrategy(Strategy):
     df_h4: pd.DataFrame = None
     df_h1: pd.DataFrame = None
-    trade_log: list = []  # log từng entry
+    trade_log: list = []
+    _day_start_equity: dict = {}
+    _loss_days: set = set()
+    fixed_lot: float = 0.0  # set per-symbol before bt.run()
 
     def init(self):
         SMCStrategy.trade_log = []
+        SMCStrategy._day_start_equity = {}
+        SMCStrategy._loss_days = set()
 
     def next(self):
         i = len(self.data) - 1
@@ -63,6 +78,20 @@ class SMCStrategy(Strategy):
 
         current_time  = self.data.index[i]
         current_price = float(self.data.Close[-1])
+        today = str(current_time.date())
+
+        # Ghi equity đầu ngày (chỉ khi không có lệnh đang mở để tránh floating PnL)
+        if today not in self._day_start_equity and not self.position:
+            self._day_start_equity[today] = self.equity
+
+        # Sau khi lệnh đóng (không có position), kiểm tra nếu equity giảm → đã thua
+        if not self.position and today in self._day_start_equity:
+            if self.equity < self._day_start_equity[today] and today not in self._loss_days:
+                self._loss_days.add(today)
+                print(f"  🚫 {today}: đã thua 1 lệnh — dừng trade hôm nay")
+
+        if today in self._loss_days:
+            return
 
         # ── H4 Bias ──
         h4_slice = self.df_h4[self.df_h4["time"] <= current_time]
@@ -136,10 +165,12 @@ class SMCStrategy(Strategy):
             print(f"  ⛔ SKIPPED (SL {sl_distance:.2f} > 1.5×ATR {max_sl_atr:.2f})")
             return
 
+        # Dùng lot cố định từ .env nếu có, không thì để backtesting.py tự quản lý
+        lot = SMCStrategy.fixed_lot if SMCStrategy.fixed_lot > 0 else None
         if bias == "bullish":
-            self.buy(sl=sl, tp=tp)
+            self.buy(sl=sl, tp=tp, size=lot) if lot else self.buy(sl=sl, tp=tp)
         else:
-            self.sell(sl=sl, tp=tp)
+            self.sell(sl=sl, tp=tp, size=lot) if lot else self.sell(sl=sl, tp=tp)
 
         entry_info = {
             "time":      str(current_time),
@@ -165,15 +196,15 @@ class SMCStrategy(Strategy):
         )
 
 
-def fetch_backtest_data(months: int = 3) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def fetch_backtest_data(symbol: str, months: int = 3) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     candles_h4 = months * 30 * 6
     candles_h1 = months * 30 * 24
     candles_m5 = months * 30 * 24 * 12
 
-    logger.info(f"Fetching {months} months of data...")
-    df_h4 = get_ohlcv(mt5.TIMEFRAME_H4, candles_h4, SYMBOL)
-    df_h1 = get_ohlcv(mt5.TIMEFRAME_H1, candles_h1, SYMBOL)
-    df_m5 = get_ohlcv(mt5.TIMEFRAME_M5, candles_m5, SYMBOL)
+    logger.info(f"Fetching {months} months of data for {symbol}...")
+    df_h4 = get_ohlcv(mt5.TIMEFRAME_H4, candles_h4, symbol)
+    df_h1 = get_ohlcv(mt5.TIMEFRAME_H1, candles_h1, symbol)
+    df_m5 = get_ohlcv(mt5.TIMEFRAME_M5, candles_m5, symbol)
     return df_h4, df_h1, df_m5
 
 
@@ -251,7 +282,7 @@ def save_summary(stats, trades, trade_log: list, pnl_col: str, time_col: str, en
     lines = []
 
     lines.append("=" * 60)
-    lines.append("  BACKTEST SUMMARY — SMC Bot XAUUSDm")
+    lines.append(f"  BACKTEST SUMMARY — SMC Bot")
     lines.append("=" * 60)
     lines.append(f"  Period        : {stats['Start']} → {stats['End']}")
     lines.append(f"  Total trades  : {stats['# Trades']}")
@@ -304,19 +335,15 @@ def save_summary(stats, trades, trade_log: list, pnl_col: str, time_col: str, en
     print(f"  Summary saved → {output_path}")
 
 
-def run_backtest(months: int = 3, cash: float = 10_000):
-    if not connect():
-        logger.error("MT5 connection failed")
-        return
-
-    df_h4, df_h1, df_m5 = fetch_backtest_data(months)
-    disconnect()
+def run_backtest_for_symbol(symbol: str, months: int = 3, cash: float = 10_000):
+    """Run backtest for a single symbol. MT5 must already be connected."""
+    df_h4, df_h1, df_m5 = fetch_backtest_data(symbol, months)
 
     if df_m5 is None or df_h4 is None or df_h1 is None:
-        logger.error("Failed to fetch data")
+        logger.error(f"Failed to fetch data for {symbol}")
         return
 
-    logger.info(f"Data loaded — H4: {len(df_h4)} | H1: {len(df_h1)} | M5: {len(df_m5)} candles")
+    logger.info(f"{symbol} — H4: {len(df_h4)} | H1: {len(df_h1)} | M5: {len(df_m5)} candles")
 
     df_m5_bt = df_m5.rename(columns={
         "open": "Open", "high": "High", "low": "Low",
@@ -325,22 +352,56 @@ def run_backtest(months: int = 3, cash: float = 10_000):
 
     SMCStrategy.df_h4 = df_h4
     SMCStrategy.df_h1 = df_h1
+    SMCStrategy.fixed_lot = _get_symbol_lot(symbol)
 
-    logger.info("Running backtest...")
-    bt    = Backtest(df_m5_bt, SMCStrategy, cash=cash, commission=0.0002, exclusive_orders=True)
+    if SMCStrategy.fixed_lot > 0:
+        logger.info(f"{symbol} — fixed lot: {SMCStrategy.fixed_lot}")
+    else:
+        logger.info(f"{symbol} — lot managed by backtesting.py (no SYMBOL_LOT set)")
+
+    # Nhân cash với leverage để mô phỏng buying power thực tế
+    leverage = int(os.getenv("LEVERAGE", "100"))
+    effective_cash = cash * leverage
+    logger.info(f"Running backtest for {symbol} | cash={cash:.0f} × leverage={leverage} = {effective_cash:.0f}")
+    bt    = Backtest(df_m5_bt, SMCStrategy, cash=effective_cash, commission=0.0002, exclusive_orders=True)
     stats = bt.run()
 
+    print(f"\n{'#'*60}")
+    print(f"  SYMBOL: {symbol}")
+    print(f"{'#'*60}")
     print_summary(stats, SMCStrategy.trade_log)
+
+    html_file = f"backtest_result_{symbol}.html"
     try:
-        bt.plot(filename="backtest_result.html", open_browser=False)
-        print("  Chart → backtest_result.html")
+        bt.plot(filename=html_file, open_browser=False)
+        print(f"  Chart → {html_file}")
     except Exception as e:
-        logger.warning(f"Chart generation skipped (known Python 3.7 bug): {e}")
+        logger.warning(f"Chart generation skipped: {e}")
+
+
+def run_backtest(months: int = 3, cash: float = 0):
+    if not connect():
+        logger.error("MT5 connection failed")
+        return
+
+    # Nếu không truyền cash, dùng balance thật từ MT5
+    if cash <= 0:
+        from connectors.mt5_connector import get_account_balance
+        cash = get_account_balance()
+        logger.info(f"Using real account balance: {cash:.2f}")
+
+    logger.info(f"Backtesting symbols: {SYMBOLS}")
+
+    try:
+        for symbol in SYMBOLS:
+            run_backtest_for_symbol(symbol, months, cash)
+    finally:
+        disconnect()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--months", type=int, default=3, help="Months of history to backtest")
-    parser.add_argument("--cash",   type=float, default=10000, help="Starting capital")
+    parser.add_argument("--cash",   type=float, default=0, help="Starting capital (0 = dùng balance thật từ MT5)")
     args = parser.parse_args()
     run_backtest(args.months, args.cash)

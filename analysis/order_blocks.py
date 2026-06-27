@@ -9,51 +9,68 @@ import pandas as pd
 
 def find_bullish_obs(df: pd.DataFrame, swing_highs: list, lookback: int = 20) -> list:
     """
-    For each confirmed swing high, scan backward up to `lookback` candles
-    and find the last bearish candle — that is the bullish OB.
-    Returns list of OB dicts sorted oldest → newest.
-    An OB is invalidated (mitigated) when price closes below its bottom.
+    For each confirmed swing high, scan backward and collect ALL consecutive
+    bearish candles immediately before the impulse — merge them into one OB zone.
+    OB top = open of first bearish candle, OB bottom = close of last bearish candle.
     """
     obs = []
     for sh_idx, sh_price in swing_highs:
         start = max(0, sh_idx - lookback)
         window = df.iloc[start:sh_idx]
+        # Collect consecutive bearish candles from the right
+        seq = []
         for i in range(len(window) - 1, -1, -1):
             row = window.iloc[i]
-            if row["close"] < row["open"]:  # bearish candle
-                obs.append({
-                    "index":   start + i,
-                    "time":    row["time"],
-                    "top":     float(row["open"]),
-                    "bottom":  float(row["close"]),
-                    "type":    "bullish",
-                    "sh_price": sh_price,
-                })
+            if row["close"] < row["open"]:
+                seq.append(start + i)
+            else:
                 break
+        if not seq:
+            continue
+        seq_sorted = sorted(seq)
+        first_idx = seq_sorted[0]
+        last_idx  = seq_sorted[-1]
+        obs.append({
+            "index":   last_idx,
+            "time":    df.iloc[last_idx]["time"],
+            "top":     float(df.iloc[first_idx]["open"]),
+            "bottom":  float(df.iloc[last_idx]["close"]),
+            "type":    "bullish",
+            "sh_price": sh_price,
+        })
     return obs
 
 
 def find_bearish_obs(df: pd.DataFrame, swing_lows: list, lookback: int = 20) -> list:
     """
-    For each confirmed swing low, scan backward up to `lookback` candles
-    and find the last bullish candle — that is the bearish OB.
+    For each confirmed swing low, scan backward and collect ALL consecutive
+    bullish candles immediately before the impulse — merge them into one OB zone.
+    OB top = close of last bullish candle, OB bottom = open of first bullish candle.
     """
     obs = []
     for sl_idx, sl_price in swing_lows:
         start = max(0, sl_idx - lookback)
         window = df.iloc[start:sl_idx]
+        seq = []
         for i in range(len(window) - 1, -1, -1):
             row = window.iloc[i]
-            if row["close"] > row["open"]:  # bullish candle
-                obs.append({
-                    "index":   start + i,
-                    "time":    row["time"],
-                    "top":     float(row["close"]),
-                    "bottom":  float(row["open"]),
-                    "type":    "bearish",
-                    "sl_price": sl_price,
-                })
+            if row["close"] > row["open"]:
+                seq.append(start + i)
+            else:
                 break
+        if not seq:
+            continue
+        seq_sorted = sorted(seq)
+        first_idx = seq_sorted[0]
+        last_idx  = seq_sorted[-1]
+        obs.append({
+            "index":   last_idx,
+            "time":    df.iloc[last_idx]["time"],
+            "top":     float(df.iloc[last_idx]["close"]),
+            "bottom":  float(df.iloc[first_idx]["open"]),
+            "type":    "bearish",
+            "sl_price": sl_price,
+        })
     return obs
 
 
