@@ -76,8 +76,7 @@ async def trading_loop(bot_state: dict):
                     await send_message(
                         f"❌ <b>Lệnh đóng — THUA</b>\n"
                         f"Symbol: {info['symbol']} | Ticket: <code>{ticket}</code>\n"
-                        f"PnL: {pnl:+.2f} USD\n"
-                        f"⛔ Dừng trade hôm nay."
+                        f"PnL: {pnl:+.2f} USD"
                     )
                 else:
                     await send_message(

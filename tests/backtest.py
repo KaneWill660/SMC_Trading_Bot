@@ -30,7 +30,6 @@ from risk.risk_manager import calculate_tp
 SYMBOLS = [s.strip() for s in os.getenv("SYMBOLS", "XAUUSDc").split(",") if s.strip()]
 MIN_RR      = 2.0
 OB_BUFFER   = 0.50
-MAX_SL_ABS  = 35.0
 ATR_MULT    = 2.0
 ATR_PERIOD  = 14
 
@@ -62,14 +61,10 @@ class SMCStrategy(Strategy):
     df_h4: pd.DataFrame = None
     df_h1: pd.DataFrame = None
     trade_log: list = []
-    _day_start_equity: dict = {}
-    _loss_days: set = set()
     fixed_lot: float = 0.0  # set per-symbol before bt.run()
 
     def init(self):
         SMCStrategy.trade_log = []
-        SMCStrategy._day_start_equity = {}
-        SMCStrategy._loss_days = set()
 
     def next(self):
         i = len(self.data) - 1
@@ -78,20 +73,6 @@ class SMCStrategy(Strategy):
 
         current_time  = self.data.index[i]
         current_price = float(self.data.Close[-1])
-        today = str(current_time.date())
-
-        # Ghi equity đầu ngày (chỉ khi không có lệnh đang mở để tránh floating PnL)
-        if today not in self._day_start_equity and not self.position:
-            self._day_start_equity[today] = self.equity
-
-        # Sau khi lệnh đóng (không có position), kiểm tra nếu equity giảm → đã thua
-        if not self.position and today in self._day_start_equity:
-            if self.equity < self._day_start_equity[today] and today not in self._loss_days:
-                self._loss_days.add(today)
-                print(f"  🚫 {today}: đã thua 1 lệnh — dừng trade hôm nay")
-
-        if today in self._loss_days:
-            return
 
         # ── H4 Bias ──
         h4_slice = self.df_h4[self.df_h4["time"] <= current_time]
@@ -153,17 +134,7 @@ class SMCStrategy(Strategy):
             tp = calculate_tp(current_price, sl, rr=MIN_RR, direction="SELL")
             direction = "SELL"
 
-        # ── SL Filter: max tuyệt đối + ATR ──
-        sl_distance = abs(current_price - sl)
-        atr = calculate_atr(h1_slice, ATR_PERIOD)
-        max_sl_atr = ATR_MULT * atr if atr and atr > 0 else MAX_SL_ABS
 
-        if sl_distance > MAX_SL_ABS:
-            print(f"  ⛔ SKIPPED (SL {sl_distance:.2f} > max {MAX_SL_ABS})")
-            return
-        if sl_distance > max_sl_atr:
-            print(f"  ⛔ SKIPPED (SL {sl_distance:.2f} > 1.5×ATR {max_sl_atr:.2f})")
-            return
 
         # Dùng lot cố định từ .env nếu có, không thì để backtesting.py tự quản lý
         lot = SMCStrategy.fixed_lot if SMCStrategy.fixed_lot > 0 else None

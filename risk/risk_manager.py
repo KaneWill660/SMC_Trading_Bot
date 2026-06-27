@@ -62,36 +62,18 @@ class DailyRiskTracker:
         self.initial_balance    = initial_balance
         self.max_daily_loss_pct = max_daily_loss_pct
         self.daily_pnl          = 0.0
-        self._tripped           = False
-
-    @property
-    def max_daily_loss(self) -> float:
-        return self.initial_balance * self.max_daily_loss_pct
 
     def record_trade(self, pnl: float):
         self.daily_pnl += pnl
         if pnl < 0:
-            self._tripped = True
-            logger.warning(
-                f"Trade loss recorded: {pnl:.2f} — dừng trade hôm nay"
-            )
+            logger.warning(f"Trade loss recorded: {pnl:.2f} | Daily PnL: {self.daily_pnl:.2f}")
         else:
             logger.info(f"Trade win recorded: +{pnl:.2f} | Daily PnL: {self.daily_pnl:.2f}")
 
     def circuit_breaker_tripped(self) -> bool:
-        if self._tripped:
-            return True
-        if self.daily_pnl <= -self.max_daily_loss:
-            self._tripped = True
-            logger.warning(
-                f"Circuit breaker tripped! Daily loss {self.daily_pnl:.2f} "
-                f"exceeded limit {-self.max_daily_loss:.2f}"
-            )
-        return self._tripped
+        return False
 
     def reset(self, new_balance: float):
-        """Call this at the start of each trading day."""
         self.initial_balance = new_balance
         self.daily_pnl       = 0.0
-        self._tripped        = False
         logger.info(f"Daily risk tracker reset | Balance: {new_balance:.2f}")

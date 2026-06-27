@@ -9,11 +9,15 @@ Flow:
           → Signal dict returned
 """
 
+import os
 from datetime import datetime, timezone
 
 import MetaTrader5 as mt5
 import pandas as pd
+from dotenv import load_dotenv
 from loguru import logger
+
+load_dotenv()
 
 from analysis.fvg import find_fvgs, filter_unfilled_fvgs, get_fvgs_in_ob, price_in_fvg
 from analysis.order_blocks import find_bullish_obs, find_bearish_obs, get_nearest_ob
@@ -28,8 +32,14 @@ COUNT_M15 = 100
 COUNT_M5  = 50
 
 # OB parameters
-OB_SL_BUFFER = 0.50  # extra buffer below/above OB for SL placement (price units)
-MIN_RR       = 2.0
+MIN_RR = 2.0
+
+def _get_sl_buffer(symbol: str) -> float:
+    val = os.getenv(f"SYMBOL_SL_BUFFER_{symbol}", "").strip()
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.50  # default fallback
 
 
 def get_current_session() -> str:
@@ -135,12 +145,13 @@ def check_for_signal(
 
     # ── Step 5: Build signal ──────────────────────────────────────────────────
     entry = current_price
+    sl_buffer = _get_sl_buffer(symbol)
 
     if bias == "bullish":
-        sl = round(ob["bottom"] - OB_SL_BUFFER, 2)
+        sl = round(ob["bottom"] - sl_buffer, 5)
         tp_target = htf["last_sh"]  # previous H4 swing high as TP target
     else:
-        sl = round(ob["top"] + OB_SL_BUFFER, 2)
+        sl = round(ob["top"] + sl_buffer, 5)
         tp_target = htf["last_sl"]
 
     tp = calculate_tp(entry, sl, rr=MIN_RR, direction="BUY" if bias == "bullish" else "SELL")
