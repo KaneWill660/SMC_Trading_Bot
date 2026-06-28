@@ -71,7 +71,14 @@ class DailyRiskTracker:
             logger.info(f"Trade win recorded: +{pnl:.2f} | Daily PnL: {self.daily_pnl:.2f}")
 
     def circuit_breaker_tripped(self) -> bool:
-        return False
+        max_loss = self.initial_balance * self.max_daily_loss_pct
+        tripped = self.daily_pnl <= -max_loss
+        if tripped:
+            logger.warning(
+                f"Circuit breaker TRIPPED | Daily PnL: {self.daily_pnl:.2f} "
+                f"/ Max loss: -{max_loss:.2f}"
+            )
+        return tripped
 
     def reset(self, new_balance: float):
         self.initial_balance = new_balance

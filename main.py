@@ -23,9 +23,13 @@ from strategy.entry_manager import check_for_signal, is_trading_session
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SYMBOLS            = [s.strip() for s in os.getenv("SYMBOLS", "XAUUSDc").split(",") if s.strip()]
-MAX_DAILY_LOSS_PCT = 0.03
-CHECK_INTERVAL_SEC = 300  # 5 minutes
+SYMBOLS              = [s.strip() for s in os.getenv("SYMBOLS", "XAUUSDc").split(",") if s.strip()]
+MAX_DAILY_LOSS_PCT   = 0.03
+CHECK_INTERVAL_SEC   = 300   # 5 minutes
+SIGNAL_COOLDOWN_MIN  = 15    # minutes between signals for the same symbol (Psychology Trap)
+
+# Track last signal time per symbol to prevent duplicate entries
+_last_signal_time: dict[str, datetime] = {}
 
 def _load_symbol_lots() -> dict:
     """Read per-symbol fixed lot sizes from .env. Returns {} if not set."""
@@ -110,6 +114,12 @@ async def trading_loop(bot_state: dict):
         risk_percent = bot_state.get("risk_percent", 0.01)
 
         for symbol in SYMBOLS:
+            # Cooldown: skip if same symbol had a signal within SIGNAL_COOLDOWN_MIN
+            last_sig = _last_signal_time.get(symbol)
+            if last_sig and (now - last_sig).total_seconds() < SIGNAL_COOLDOWN_MIN * 60:
+                logger.debug(f"{symbol} cooldown active — skipping (Psychology Trap)")
+                continue
+
             fixed_lot = SYMBOL_LOTS.get(symbol)
             signal = check_for_signal(symbol, balance, risk_percent, fixed_lot)
 
@@ -128,6 +138,7 @@ async def trading_loop(bot_state: dict):
                 )
 
                 if ticket:
+                    _last_signal_time[symbol] = now
                     open_tickets[ticket] = {"symbol": symbol, "balance_before": balance}
                     logger.info(f"Order placed | ticket={ticket} | {symbol}")
                     await send_message(

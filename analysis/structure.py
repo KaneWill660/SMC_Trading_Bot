@@ -45,6 +45,24 @@ def detect_bos(
     return False
 
 
+def detect_mss(
+    df: pd.DataFrame,
+    swing_highs: list,
+    swing_lows: list,
+    direction: str,
+) -> bool:
+    """
+    Market Structure Shift — strict BOS with no buffer.
+    Requires close to cleanly breach the swing level (no tolerance).
+    Used after a liquidity sweep to confirm the structure has genuinely shifted.
+    """
+    if direction == "bullish" and swing_highs:
+        return float(df["close"].iloc[-1]) > swing_highs[-1][1]
+    if direction == "bearish" and swing_lows:
+        return float(df["close"].iloc[-1]) < swing_lows[-1][1]
+    return False
+
+
 def detect_choch(
     df: pd.DataFrame,
     swing_highs: list,
@@ -54,15 +72,23 @@ def detect_choch(
     """
     Detect a Change of Character — price breaks the opposite structure,
     signalling a potential reversal. Used on M5 to confirm entry.
+
+    Requires 2 consecutive candle closes past the swing level to avoid wick-poke fakes
+    (False Breakout Trap filter).
+
     direction: "bullish" → in a local downtrend, price breaks above last local swing high
                "bearish" → in a local uptrend, price breaks below last local swing low
     """
+    if len(df) < 2:
+        return False
     if direction == "bullish" and swing_highs:
-        last_sh = swing_highs[-1][1]
-        return float(df["close"].iloc[-1]) > last_sh
+        level = swing_highs[-1][1]
+        return (float(df["close"].iloc[-1]) > level and
+                float(df["close"].iloc[-2]) > level)
     if direction == "bearish" and swing_lows:
-        last_sl = swing_lows[-1][1]
-        return float(df["close"].iloc[-1]) < last_sl
+        level = swing_lows[-1][1]
+        return (float(df["close"].iloc[-1]) < level and
+                float(df["close"].iloc[-2]) < level)
     return False
 
 
