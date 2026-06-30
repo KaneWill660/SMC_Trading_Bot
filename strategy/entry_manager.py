@@ -29,7 +29,7 @@ from strategy.htf_bias import get_bias_with_levels
 # Candle counts per timeframe
 COUNT_H1  = 100
 COUNT_M15 = 100
-COUNT_M5  = 50
+COUNT_M5  = 30
 
 # OB parameters
 MIN_RR = 3.0
