@@ -26,6 +26,9 @@ def connect() -> bool:
             return False
     info = mt5.account_info()
     logger.info(f"MT5 connected | Account: {info.login} | Balance: {info.balance}")
+    terminal = mt5.terminal_info()
+    if terminal and not terminal.trade_allowed:
+        logger.warning("⚠️  Auto Trading is DISABLED in MT5 — orders will fail! Enable it in MT5 toolbar.")
     return True
 
 
@@ -130,13 +133,14 @@ def move_sl_to_entry(ticket: int) -> bool:
         return True  # already at breakeven
     request = {
         "action":   mt5.TRADE_ACTION_SLTP,
+        "symbol":   pos.symbol,
         "position": ticket,
         "sl":       pos.price_open,
         "tp":       pos.tp,
     }
     result = mt5.order_send(request)
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        logger.error(f"Breakeven failed ticket={ticket}: {result.retcode} {result.comment}")
+        logger.error(f"Breakeven failed ticket={ticket}: retcode={result.retcode} comment={result.comment!r} sl={pos.price_open} symbol={pos.symbol}")
         return False
     logger.info(f"Breakeven set for ticket={ticket} @ {pos.price_open}")
     return True

@@ -28,7 +28,7 @@ from strategy.htf_bias import compute_bias_from_df
 from risk.risk_manager import calculate_tp
 
 SYMBOLS = [s.strip() for s in os.getenv("SYMBOLS", "XAUUSDc").split(",") if s.strip()]
-MIN_RR      = 2.0
+MIN_RR      = 3.0
 OB_BUFFER   = 0.50
 ATR_MULT    = 2.0
 ATR_PERIOD  = 14

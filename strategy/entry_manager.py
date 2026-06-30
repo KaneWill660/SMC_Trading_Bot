@@ -3,11 +3,10 @@ Entry Manager — combines all timeframes to produce a trade signal.
 
 Flow:
   H4 bias (bullish/bearish)
-    → H1 Liquidity Sweep (EQH/EQL swept — Liquidity Trap filter)
-      → H1 Order Block + BOS confirmation
-        → M15 FVG within OB (optional but preferred)
-          → M5 CHoCH confirmation
-            → Signal dict returned
+    → H1 BOS confirmation + H1 Order Block
+      → M15 FVG within OB (optional but preferred)
+        → M5 CHoCH confirmation
+          → Signal dict returned
 """
 
 import os
@@ -21,9 +20,8 @@ from loguru import logger
 load_dotenv()
 
 from analysis.fvg import find_fvgs, filter_unfilled_fvgs, get_fvgs_in_ob, price_in_fvg
-from analysis.liquidity import get_buyside_liquidity, get_sellside_liquidity, detect_liquidity_sweep
 from analysis.order_blocks import find_bullish_obs, find_bearish_obs, get_nearest_ob
-from analysis.structure import find_swing_points, detect_bos, detect_mss, detect_choch
+from analysis.structure import find_swing_points, detect_bos, detect_choch
 from connectors.mt5_connector import get_ohlcv
 from risk.risk_manager import calculate_lot_size, calculate_tp
 from strategy.htf_bias import get_bias_with_levels
@@ -88,10 +86,7 @@ def check_for_signal(
         return None
     logger.info(f"HTF bias: {bias}")
 
-    # ── Step 2: H1 Liquidity Sweep (Liquidity Trap filter) ───────────────────
-    # Chỉ vào lệnh sau khi giá đã quét EQH/EQL để tránh False Breakout Trap.
-    # Bullish: cần sell-side liquidity (EQL) bị quét trước khi đảo chiều lên.
-    # Bearish: cần buy-side liquidity (EQH) bị quét trước khi đảo chiều xuống.
+    # ── Step 2: H1 BOS + Order Block ─────────────────────────────────────────
     df_h1 = get_ohlcv(mt5.TIMEFRAME_H1, COUNT_H1, symbol)
     if df_h1 is None:
         return None
@@ -99,46 +94,19 @@ def check_for_signal(
     sh_h1, sl_h1 = find_swing_points(df_h1, n=5)
     current_price = float(df_h1["close"].iloc[-1])
 
-    liq_sweep_confirmed = False
-    swept_level = None
-
     if bias == "bullish":
-        eq_lows = get_sellside_liquidity(sl_h1)  # EQL clusters
-        for (p1, p2) in eq_lows:
-            level = min(p1[1], p2[1])
-            if detect_liquidity_sweep(df_h1, level, sweep_type="low"):
-                liq_sweep_confirmed = True
-                swept_level = level
-                logger.info(f"Sell-side liquidity swept at {level:.2f} — Liquidity Trap cleared")
-                break
-    else:
-        eq_highs = get_buyside_liquidity(sh_h1)  # EQH clusters
-        for (p1, p2) in eq_highs:
-            level = max(p1[1], p2[1])
-            if detect_liquidity_sweep(df_h1, level, sweep_type="high"):
-                liq_sweep_confirmed = True
-                swept_level = level
-                logger.info(f"Buy-side liquidity swept at {level:.2f} — Liquidity Trap cleared")
-                break
-
-    if not liq_sweep_confirmed:
-        logger.debug(f"No H1 liquidity sweep detected for {bias} — skipping (Liquidity Trap filter)")
-        return None
-
-    # Sau khi liquidity đã bị quét, yêu cầu MSS (strict — không có buffer)
-    # thay vì BOS thông thường để tránh False Breakout Trap.
-    if bias == "bullish":
-        mss_confirmed = detect_mss(df_h1, sh_h1, sl_h1, "bullish")
+        if not detect_bos(df_h1, sh_h1, sl_h1, "bullish"):
+            logger.debug("H1 BOS not confirmed for bullish")
+            return None
         obs_h1 = find_bullish_obs(df_h1, sh_h1)
         ob = get_nearest_ob(obs_h1, current_price, "bullish")
     else:
-        mss_confirmed = detect_mss(df_h1, sh_h1, sl_h1, "bearish")
+        if not detect_bos(df_h1, sh_h1, sl_h1, "bearish"):
+            logger.debug("H1 BOS not confirmed for bearish")
+            return None
         obs_h1 = find_bearish_obs(df_h1, sl_h1)
         ob = get_nearest_ob(obs_h1, current_price, "bearish")
 
-    if not mss_confirmed:
-        logger.debug(f"H1 MSS not confirmed for {bias} — False Breakout filter")
-        return None
     if ob is None:
         logger.debug(f"No valid H1 OB found for {bias}")
         return None
@@ -171,17 +139,10 @@ def check_for_signal(
     sh_m5, sl_m5 = find_swing_points(df_m5, n=3)
     choch = detect_choch(df_m5, sh_m5, sl_m5, bias)
     if not choch:
-        logger.debug(f"M5 CHoCH not confirmed for {bias} — 2-candle rule failed")
+        logger.debug(f"M5 CHoCH not confirmed for {bias}")
         return None
 
-    # Sau CHoCH phải có MSS M5 cùng hướng để confirm đảo chiều thật,
-    # không phải pullback trong trend cũ (Fake Reversal Trap filter).
-    mss_m5 = detect_mss(df_m5, sh_m5, sl_m5, bias)
-    if not mss_m5:
-        logger.debug(f"M5 MSS not confirmed after CHoCH for {bias} — Fake Reversal filter")
-        return None
-
-    logger.info(f"M5 CHoCH + MSS confirmed ({bias}) — building signal")
+    logger.info(f"M5 CHoCH confirmed ({bias}) — building signal")
 
     # ── Step 5: Build signal ──────────────────────────────────────────────────
     entry = current_price

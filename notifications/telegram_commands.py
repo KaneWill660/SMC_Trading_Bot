@@ -82,47 +82,47 @@ async def cmd_balance(chat_id: int):
 
 async def cmd_status(chat_id: int):
     positions = get_all_positions()
-    pending   = get_pending_orders()
 
-    if not positions and not pending:
-        await _reply(chat_id, "📭 Không có lệnh nào đang mở hoặc đang chờ.")
+    if not positions:
+        await _reply(chat_id, "📭 Không có lệnh nào đang chạy.")
         return
 
-    lines = []
+    lines = ["📊 <b>Lệnh đang chạy:</b>\n"]
+    for p in positions:
+        direction = "BUY 🟢" if p.type == 0 else "SELL 🔴"
+        pnl_sign  = "+" if p.profit >= 0 else ""
+        lines.append(
+            f"• <b>{p.symbol}</b> {direction}\n"
+            f"  Lot: {p.volume} | Entry: {p.price_open:.2f}\n"
+            f"  SL: {p.sl:.2f} | TP: {p.tp:.2f}\n"
+            f"  P&L: <b>{pnl_sign}{p.profit:.2f} USD</b>\n"
+            f"  Ticket: <code>{p.ticket}</code>"
+        )
 
-    # ── Open positions ──
-    if positions:
-        lines.append("📊 <b>Lệnh đang mở:</b>\n")
-        for p in positions:
-            direction = "BUY 🟢" if p.type == 0 else "SELL 🔴"
-            pnl_sign  = "+" if p.profit >= 0 else ""
-            lines.append(
-                f"• <b>{p.symbol}</b> {direction}\n"
-                f"  Lot: {p.volume} | Entry: {p.price_open:.2f}\n"
-                f"  SL: {p.sl:.2f} | TP: {p.tp:.2f}\n"
-                f"  P&L: <b>{pnl_sign}{p.profit:.2f} USD</b>\n"
-                f"  Ticket: <code>{p.ticket}</code>"
-            )
+    await _reply(chat_id, "\n".join(lines))
 
-    # ── Pending orders ──
-    if pending:
-        # MT5 order type mapping
-        order_type_map = {
-            2: "BUY LIMIT", 3: "SELL LIMIT",
-            4: "BUY STOP",  5: "SELL STOP",
-            6: "BUY STOP LIMIT", 7: "SELL STOP LIMIT",
-        }
-        if positions:
-            lines.append("")
-        lines.append("⏳ <b>Lệnh đang chờ (Pending):</b>\n")
-        for o in pending:
-            order_type = order_type_map.get(o.type, f"TYPE_{o.type}")
-            lines.append(
-                f"• <b>{o.symbol}</b> {order_type}\n"
-                f"  Lot: {o.volume_current} | Price: {o.price_open:.2f}\n"
-                f"  SL: {o.sl:.2f} | TP: {o.tp:.2f}\n"
-                f"  Ticket: <code>{o.ticket}</code>"
-            )
+
+async def cmd_pending(chat_id: int):
+    pending = get_pending_orders()
+
+    if not pending:
+        await _reply(chat_id, "📭 Không có lệnh pending nào.")
+        return
+
+    order_type_map = {
+        2: "BUY LIMIT", 3: "SELL LIMIT",
+        4: "BUY STOP",  5: "SELL STOP",
+        6: "BUY STOP LIMIT", 7: "SELL STOP LIMIT",
+    }
+    lines = ["⏳ <b>Lệnh đang chờ (Pending):</b>\n"]
+    for o in pending:
+        order_type = order_type_map.get(o.type, f"TYPE_{o.type}")
+        lines.append(
+            f"• <b>{o.symbol}</b> {order_type}\n"
+            f"  Lot: {o.volume_current} | Price: {o.price_open:.2f}\n"
+            f"  SL: {o.sl:.2f} | TP: {o.tp:.2f}\n"
+            f"  Ticket: <code>{o.ticket}</code>"
+        )
 
     await _reply(chat_id, "\n".join(lines))
 
@@ -169,7 +169,7 @@ async def cmd_breakeven(chat_id: int):
                 count += 1
 
     if count:
-        await _reply(chat_id, f"✅ Đã chuyển SL về entry cho <b>{count}</b> lệnh đang có lãi.")
+        await _reply(chat_id, f"✅ Đã BE <b>{count}</b> lệnh có lãi (tất cả lệnh, kể cả lệnh thủ công).")
     else:
         await _reply(chat_id, "⚠️ Không có lệnh nào đang có lãi để chuyển breakeven.")
 
@@ -192,7 +192,8 @@ async def cmd_help(chat_id: int):
     msg = (
         "🤖 <b>SMC Bot — Danh sách lệnh:</b>\n\n"
         "/balance — Số dư tài khoản\n"
-        "/status — Lệnh đang mở & P&L\n"
+        "/status — Lệnh đang chạy & P&L\n"
+        "/pending — Lệnh đang chờ (Pending)\n"
         "/report N — Tổng kết N ngày gần nhất\n"
         "/stop — Dừng quét tín hiệu\n"
         "/start — Tiếp tục quét tín hiệu\n"
@@ -252,6 +253,9 @@ async def poll_commands(bot_state: dict):
 
                 elif text.startswith("/status"):
                     await cmd_status(chat_id)
+
+                elif text.startswith("/pending"):
+                    await cmd_pending(chat_id)
 
                 elif text.startswith("/report"):
                     await cmd_report(chat_id, text)

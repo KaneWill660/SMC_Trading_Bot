@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from connectors.mt5_connector import (
-    connect, disconnect, get_account_balance, get_all_positions, place_market_order
+    connect, disconnect, get_account_balance, get_all_positions, place_market_order, move_sl_to_entry
 )
 from notifications.telegram_commands import poll_commands
 from notifications.telegram_notifier import send_signal, send_message
@@ -25,11 +25,11 @@ load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 SYMBOLS              = [s.strip() for s in os.getenv("SYMBOLS", "XAUUSDc").split(",") if s.strip()]
 MAX_DAILY_LOSS_PCT   = 0.03
-CHECK_INTERVAL_SEC   = 300   # 5 minutes
+CHECK_INTERVAL_SEC   = 120   # 2 minutes
 SIGNAL_COOLDOWN_MIN  = 15    # minutes between signals for the same symbol (Psychology Trap)
 
 # Track last signal time per symbol to prevent duplicate entries
-_last_signal_time: dict[str, datetime] = {}
+_last_signal_time: dict = {}
 
 def _load_symbol_lots() -> dict:
     """Read per-symbol fixed lot sizes from .env. Returns {} if not set."""
@@ -51,6 +51,7 @@ async def trading_loop(bot_state: dict):
     tracker = DailyRiskTracker(balance, MAX_DAILY_LOSS_PCT)
     last_reset_day = datetime.now(timezone.utc).date()
     open_tickets   = {}  # {ticket: {"symbol": str, "balance_before": float}}
+    be_done        = set()  # tickets đã được auto-BE
 
     while True:
         now = datetime.now(timezone.utc)
@@ -68,6 +69,23 @@ async def trading_loop(bot_state: dict):
             bot_state["paused"] = False
             bot_state["pause_until"] = None
             await send_message("▶️ Hết thời gian tạm dừng — Bot tiếp tục quét tín hiệu.")
+
+        # Auto breakeven khi R:R đạt 1:1
+        for p in get_all_positions():
+            if p.ticket in be_done:
+                continue
+            if p.sl == 0 or p.sl == p.price_open:
+                continue
+            risk = abs(p.price_open - p.sl)
+            moved = (p.price_current - p.price_open) if p.type == 0 else (p.price_open - p.price_current)
+            if moved >= risk:
+                if move_sl_to_entry(p.ticket):
+                    be_done.add(p.ticket)
+                    logger.info(f"Auto-BE triggered | ticket={p.ticket} | {p.symbol}")
+                    await send_message(
+                        f"🔒 <b>Auto Breakeven</b> — {p.symbol}\n"
+                        f"Ticket: <code>{p.ticket}</code> đã đạt 1:1 R:R → SL chuyển về entry."
+                    )
 
         # Kiểm tra lệnh đã đóng → record PnL
         current_open = {p.ticket for p in get_all_positions()}
@@ -148,7 +166,14 @@ async def trading_loop(bot_state: dict):
                     )
                 else:
                     logger.error(f"Order placement failed for {symbol}")
-                    await send_message(f"❌ <b>Order failed</b> — {symbol}. Check logs.")
+                    terminal = mt5.terminal_info()
+                    if terminal and not terminal.trade_allowed:
+                        await send_message(
+                            f"❌ <b>Order failed</b> — {symbol}\n"
+                            f"⚠️ <b>Auto Trading đang TẮT!</b> Bật nút Auto Trading trong MT5 để đặt lệnh."
+                        )
+                    else:
+                        await send_message(f"❌ <b>Order failed</b> — {symbol}. Check logs.")
 
         await asyncio.sleep(CHECK_INTERVAL_SEC)
 
@@ -161,6 +186,10 @@ async def run_bot():
     if not connect():
         logger.error("Failed to connect to MT5 — exiting")
         return
+
+    terminal = mt5.terminal_info()
+    if terminal and not terminal.trade_allowed:
+        await send_message("⚠️ <b>Auto Trading đang TẮT trong MT5!</b>\nBật nút Auto Trading trên toolbar MT5 để bot có thể đặt lệnh.")
 
     await send_message(
         f"🤖 <b>SMC Trading Bot started</b>\n"
