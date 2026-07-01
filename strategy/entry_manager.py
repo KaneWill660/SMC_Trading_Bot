@@ -78,6 +78,12 @@ def check_for_signal(
         logger.debug("Outside trading session — skipping")
         return None
 
+    # Check if symbol market is open for trading
+    sym_info = mt5.symbol_info(symbol)
+    if not sym_info or sym_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
+        logger.debug(f"Market closed for {symbol}")
+        return None
+
     # ── Step 1: HTF Bias ──────────────────────────────────────────────────────
     htf = get_bias_with_levels(symbol, mt5.TIMEFRAME_H4)
     bias = htf.get("bias", "ranging")

@@ -27,9 +27,19 @@ SYMBOLS              = [s.strip() for s in os.getenv("SYMBOLS", "XAUUSDc").split
 MAX_DAILY_LOSS_PCT   = 0.03
 CHECK_INTERVAL_SEC   = 120   # 2 minutes
 SIGNAL_COOLDOWN_MIN  = 15    # minutes between signals for the same symbol (Psychology Trap)
+ENTRY_TOLERANCE_DEFAULT = 10.0  # USD fallback if SYMBOL_ENTRY_TOL_<symbol> not set
 
 # Track last signal time per symbol to prevent duplicate entries
 _last_signal_time: dict = {}
+_last_entry_price: dict = {}  # {symbol: price}
+
+def _get_entry_tolerance(symbol: str) -> float:
+    val = os.getenv(f"SYMBOL_ENTRY_TOL_{symbol}", "").strip()
+    try:
+        return float(val) if val else ENTRY_TOLERANCE_DEFAULT
+    except ValueError:
+        return ENTRY_TOLERANCE_DEFAULT
+
 
 def _load_symbol_lots() -> dict:
     """Read per-symbol fixed lot sizes from .env. Returns {} if not set."""
@@ -142,7 +152,15 @@ async def trading_loop(bot_state: dict):
             signal = check_for_signal(symbol, balance, risk_percent, fixed_lot)
 
             if signal:
+                # Check if entry price is too close to last entry (ranging market duplicate)
+                last_price = _last_entry_price.get(symbol)
+                if last_price and abs(signal["entry"] - last_price) < _get_entry_tolerance(symbol):
+                    logger.debug(f"{symbol} — entry {signal['entry']:.2f} too close to last {last_price:.2f}, skipping")
+                    continue
+
                 logger.info(f"Signal found: {symbol} {signal['direction']} @ {signal['entry']}")
+                _last_entry_price[symbol] = signal["entry"]
+                _last_signal_time[symbol] = now  # prevent duplicate signals even if order fails
 
                 await send_signal(signal)
 
@@ -156,7 +174,6 @@ async def trading_loop(bot_state: dict):
                 )
 
                 if ticket:
-                    _last_signal_time[symbol] = now
                     open_tickets[ticket] = {"symbol": symbol, "balance_before": balance}
                     logger.info(f"Order placed | ticket={ticket} | {symbol}")
                     await send_message(
