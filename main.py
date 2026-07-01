@@ -17,7 +17,7 @@ from connectors.mt5_connector import (
 )
 from notifications.telegram_commands import poll_commands
 from notifications.telegram_notifier import send_signal, send_message
-from risk.risk_manager import DailyRiskTracker
+from risk.risk_manager import DailyRiskTracker, calculate_tp
 from strategy.entry_manager import check_for_signal, is_trading_session
 
 load_dotenv()
@@ -32,6 +32,12 @@ ENTRY_TOLERANCE_DEFAULT = 10.0  # USD fallback if SYMBOL_ENTRY_TOL_<symbol> not 
 # Track last signal time per symbol to prevent duplicate entries
 _last_signal_time: dict = {}
 _last_entry_price: dict = {}  # {symbol: price}
+
+def _split_lots(total_lot: float) -> tuple:
+    """Split total lot into 3 orders in ratio 1:2:1."""
+    unit = max(0.01, round(total_lot / 4, 2))
+    return unit, round(unit * 2, 2), unit
+
 
 def _get_entry_tolerance(symbol: str) -> float:
     val = os.getenv(f"SYMBOL_ENTRY_TOL_{symbol}", "").strip()
@@ -164,25 +170,36 @@ async def trading_loop(bot_state: dict):
 
                 await send_signal(signal)
 
-                ticket = place_market_order(
-                    direction=signal["direction"],
-                    lot=signal["lot"],
-                    sl=signal["sl"],
-                    tp=signal["tp"],
-                    comment="SMC_Bot",
-                    symbol=symbol,
-                )
+                lots = _split_lots(signal["lot"])
+                tps = [
+                    calculate_tp(signal["entry"], signal["sl"], rr=1.0, direction=signal["direction"]),
+                    calculate_tp(signal["entry"], signal["sl"], rr=2.0, direction=signal["direction"]),
+                    signal["tp"],  # tp3 = MIN_RR (3R) từ entry_manager
+                ]
 
-                if ticket:
-                    open_tickets[ticket] = {"symbol": symbol, "balance_before": balance}
-                    logger.info(f"Order placed | ticket={ticket} | {symbol}")
-                    await send_message(
-                        f"✅ <b>Order placed</b> — {symbol}\n"
-                        f"Ticket: <code>{ticket}</code>\n"
-                        f"{signal['direction']} {signal['lot']} lot @ {signal['entry']}"
+                placed_tickets = []
+                for i, (lot, tp) in enumerate(zip(lots, tps), 1):
+                    t = place_market_order(
+                        direction=signal["direction"],
+                        lot=lot,
+                        sl=signal["sl"],
+                        tp=tp,
+                        comment=f"SMC_Bot_TP{i}",
+                        symbol=symbol,
                     )
+                    if t:
+                        open_tickets[t] = {"symbol": symbol, "balance_before": balance}
+                        placed_tickets.append((i, t, lot, tp))
+                        logger.info(f"Order {i}/3 placed | ticket={t} | {symbol} | lot={lot} | TP={tp}")
+
+                if placed_tickets:
+                    lines = [f"✅ <b>Orders placed</b> — {symbol} {signal['direction']}\n"]
+                    for i, t, lot, tp in placed_tickets:
+                        lines.append(f"  TP{i}: {lot} lot | TP: {tp:.2f} | <code>{t}</code>")
+                    lines.append(f"  SL: {signal['sl']:.2f}")
+                    await send_message("\n".join(lines))
                 else:
-                    logger.error(f"Order placement failed for {symbol}")
+                    logger.error(f"All orders failed for {symbol}")
                     terminal = mt5.terminal_info()
                     if terminal and not terminal.trade_allowed:
                         await send_message(
